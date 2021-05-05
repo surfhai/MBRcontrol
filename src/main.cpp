@@ -812,13 +812,15 @@ void setup()
   state_list[StateIndex::FILTRATION].relay_setting = CHANNLE1_BIT;
 
   strcpy(state_list[StateIndex::CLOSE_ALL1].name, "Close All");
+  state_list[StateIndex::CLOSE_ALL1].interval = 2UL * 1000UL;
   state_list[StateIndex::CLOSE_ALL1].relay_setting = 0;
 
   strcpy(state_list[StateIndex::GAS_JET].name, "Gas-Jet");
   state_list[StateIndex::GAS_JET].relay_setting = CHANNLE3_BIT;
 
-  strcpy(state_list[StateIndex::CLOSE_ALL2].name, state_list[1].name);
-  state_list[StateIndex::CLOSE_ALL2].relay_setting = state_list[1].relay_setting;
+  strcpy(state_list[StateIndex::CLOSE_ALL2].name, "Close All");
+  state_list[StateIndex::CLOSE_ALL2].interval = 2UL * 1000UL;
+  state_list[StateIndex::CLOSE_ALL2].relay_setting = 0;
 
   strcpy(state_list[StateIndex::PRESSURE_RELIEF].name, "Pressure Relief");
   state_list[StateIndex::PRESSURE_RELIEF].relay_setting = CHANNLE2_BIT;
