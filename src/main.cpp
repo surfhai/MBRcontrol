@@ -33,6 +33,7 @@ Created:
 #include <multi_channel_relay.h>
 #include <limits.h>
 #include <EEPROM.h>
+#include <avr/wdt.h>
 
 //#define DEBUG
 #define SERIALDEBUG(a) Serial.print(#a); Serial.print(": "); Serial.println(a);
@@ -87,6 +88,7 @@ enum MenuSettings
   EEPROM_SAVE_MS,
   EEPROM_LOAD_MS,
   RESET_MS,
+  FAILSAVE_MS,
   END_MS, // could maybe deleted
   COUNTER_MS
 };
@@ -132,9 +134,198 @@ char min[3] = {'\0'};
 char sec[3] = {'\0'}; // increase size to 10
 char remaining[10] = {'\0'}; // delete it and replace with sec
 
+struct Failsafe
+{
+  bool status_filtration;
+  bool status_gas_jet;
+  bool status_pressure_relief;
+  bool status_waiting;
+  uint32_t filtration_interval;
+  uint32_t gas_jet_interval;
+  uint32_t pressure_relief_interval;
+  uint32_t waiting_interval;
+  uint32_t counter;
+  bool error;
+} failsafe;
+
+struct EEPROMAddresses
+{
+  // settings
+  int s_filtration;
+  int s_gas_jet;
+  int s_pressure_relief;
+  int s_waiting;
+  // failsafe
+  int fs_status_filtration;
+  int fs_status_gas_jet;
+  int fs_status_pressure_relief;
+  int fs_status_waiting;
+  int fs_interval_filtration;
+  int fs_interval_gas_jet;
+  int fs_interval_pressure_relief;
+  int fs_interval_waiting;
+  int fs_counter;
+} addr;
+
 // Grove Encoder
 void timerIsr() {
   encoder->service();
+}
+
+void CalcEEPROMAdresses()
+{
+  addr.s_filtration = 0;
+  addr.s_gas_jet = sizeof(state_list[StateIndex::FILTRATION].interval);
+  addr.s_pressure_relief = addr.s_gas_jet + sizeof(state_list[StateIndex::GAS_JET].interval);
+  addr.s_waiting = addr.s_pressure_relief + sizeof(state_list[StateIndex::PRESSURE_RELIEF].interval);
+  addr.fs_status_filtration = addr.s_waiting + sizeof(state_list[StateIndex::WAITING].interval);
+  addr.fs_status_gas_jet = addr.fs_status_filtration + sizeof(failsafe.status_filtration);
+  addr.fs_status_pressure_relief = addr.fs_status_gas_jet + sizeof(failsafe.status_gas_jet);
+  addr.fs_status_waiting = addr.fs_status_pressure_relief + sizeof(failsafe.status_pressure_relief);
+  addr.fs_interval_filtration = addr.fs_status_waiting + sizeof(failsafe.status_waiting);
+  addr.fs_interval_gas_jet = addr.fs_interval_filtration + sizeof(failsafe.filtration_interval);
+  addr.fs_interval_pressure_relief = addr.fs_interval_gas_jet + sizeof(failsafe.gas_jet_interval);
+  addr.fs_interval_waiting = addr.fs_interval_pressure_relief + sizeof(failsafe.pressure_relief_interval);
+  addr.fs_counter = addr.fs_interval_waiting + sizeof(failsafe.waiting_interval);
+}
+
+void SettingsSave()
+{
+  /*
+  Save the time settings in the EEPROM
+  */
+  EEPROM.put(addr.s_filtration, state_list[StateIndex::FILTRATION].interval);
+  EEPROM.put(addr.s_gas_jet, state_list[StateIndex::GAS_JET].interval);
+  EEPROM.put(addr.s_pressure_relief, state_list[StateIndex::PRESSURE_RELIEF].interval);
+  EEPROM.put(addr.s_waiting, state_list[StateIndex::WAITING].interval);
+  lcd.clear();
+  lcd.print("Settings Saved");
+  delay(2000);
+}
+
+void SettingsLoad()
+{
+  /*
+  Load the time settings in the EEPROM
+  */
+  if (failsafe.error)
+  {
+    state_list[StateIndex::FILTRATION].interval = failsafe.filtration_interval;
+    state_list[StateIndex::GAS_JET].interval = failsafe.gas_jet_interval;
+    state_list[StateIndex::PRESSURE_RELIEF].interval = failsafe.pressure_relief_interval;;
+    state_list[StateIndex::WAITING].interval = failsafe.waiting_interval;
+  }
+  else
+  {
+    EEPROM.get(addr.s_filtration, state_list[StateIndex::FILTRATION].interval);
+    EEPROM.get(addr.s_gas_jet, state_list[StateIndex::GAS_JET].interval);
+    EEPROM.get(addr.s_pressure_relief, state_list[StateIndex::PRESSURE_RELIEF].interval);
+    EEPROM.get(addr.s_waiting, state_list[StateIndex::WAITING].interval);
+  }
+
+  lcd.clear();
+  lcd.print("Settings Loaded");
+  delay(2000);
+}
+
+bool CheckFailsafe()
+{
+  /*
+  Check if the microcontroler crashed and continue the execution
+  */
+  failsafe.error = false;
+  EEPROM.get(addr.fs_status_filtration, failsafe.status_filtration);
+  EEPROM.get(addr.fs_status_gas_jet, failsafe.status_gas_jet);
+  EEPROM.get(addr.fs_status_pressure_relief, failsafe.status_pressure_relief);
+  EEPROM.get(addr.fs_status_waiting, failsafe.status_waiting);
+  EEPROM.get(addr.fs_interval_filtration, failsafe.filtration_interval);
+  EEPROM.get(addr.fs_interval_gas_jet, failsafe.gas_jet_interval);
+  EEPROM.get(addr.fs_interval_pressure_relief, failsafe.pressure_relief_interval);
+  EEPROM.get(addr.fs_interval_waiting, failsafe.waiting_interval);
+  EEPROM.get(addr.fs_counter, failsafe.counter);
+  
+  if (failsafe.status_filtration)
+  {
+    state_index = StateIndex::FILTRATION;
+    failsafe.error = true;
+    EEPROM.put(addr.fs_status_filtration, false);
+  }
+  if (failsafe.status_gas_jet)
+  {
+    state_index = StateIndex::GAS_JET;
+    failsafe.error = true;
+    EEPROM.put(addr.fs_status_gas_jet, false);
+  }
+  if (failsafe.status_pressure_relief)
+  {
+    state_index = StateIndex::PRESSURE_RELIEF;
+    failsafe.error = true;
+    EEPROM.put(addr.fs_status_pressure_relief, false);
+  }
+  if (failsafe.status_waiting)
+  {
+    state_index = StateIndex::WAITING;
+    failsafe.error = true;
+    EEPROM.put(addr.fs_status_waiting, false);
+  }
+
+  if (failsafe.error)
+  {
+    state_running = true;
+    EEPROM.put(addr.fs_counter, ++failsafe.counter);
+    return false;
+  }
+  else
+  {
+    return true;
+  }
+  
+}
+
+void SetEEPROMStatus(int address)
+{
+  bool status = false;
+  bool set_status = false;
+
+  set_status = (addr.fs_status_filtration == address);
+  EEPROM.get(addr.fs_status_filtration, status);
+  if (status != set_status)
+    EEPROM.put(addr.fs_status_filtration, set_status);
+
+  set_status = (addr.fs_status_gas_jet == address);
+  EEPROM.get(addr.fs_status_gas_jet, status);
+  if (status !=  set_status)
+    EEPROM.put(addr.fs_status_gas_jet, set_status);
+
+  set_status = (addr.fs_status_pressure_relief == address);
+  EEPROM.get(addr.fs_status_pressure_relief, status);
+  if (status != set_status)
+    EEPROM.put(addr.fs_status_pressure_relief, set_status);
+
+  set_status = (addr.fs_status_waiting == address);
+  EEPROM.get(addr.fs_status_waiting, status);
+  if (status != set_status)
+    EEPROM.put(addr.fs_status_waiting, set_status);
+}
+
+void SaveIntervalsToEEPROM()
+{
+  uint32_t fs_interval = 0;
+  EEPROM.get(addr.fs_interval_filtration, fs_interval);
+  if (fs_interval != state_list[StateIndex::FILTRATION].interval)
+    EEPROM.put(addr.fs_interval_filtration, state_list[StateIndex::FILTRATION].interval);
+
+  EEPROM.get(addr.fs_interval_gas_jet, fs_interval);
+  if (fs_interval != state_list[StateIndex::GAS_JET].interval)
+    EEPROM.put(addr.fs_interval_gas_jet, state_list[StateIndex::GAS_JET].interval);
+    
+  EEPROM.get(addr.fs_interval_pressure_relief, fs_interval);
+  if (fs_interval != state_list[StateIndex::PRESSURE_RELIEF].interval)
+    EEPROM.put(addr.fs_interval_pressure_relief, state_list[StateIndex::PRESSURE_RELIEF].interval);
+
+  EEPROM.get(addr.fs_interval_waiting, fs_interval);
+  if (fs_interval != state_list[StateIndex::WAITING].interval)
+    EEPROM.put(addr.fs_interval_waiting, state_list[StateIndex::WAITING].interval);
 }
 
 void Reset()
@@ -151,43 +342,9 @@ void Reset()
   update_menu_again = false;
   menu_setting_pos = 0;
   menu_setting_edit = false;
+  // Reset EEPROM to status 0
+  SetEEPROMStatus(0);
   relay.channelCtrl(0);
-}
-
-void SettingsSave()
-{
-  /*
-  Save the time settings in the EEPROM
-  */
-  int ee_address = 0;
-  EEPROM.put(ee_address, state_list[StateIndex::FILTRATION].interval);
-  ee_address += sizeof(state_list[StateIndex::FILTRATION].interval);
-  EEPROM.put(ee_address, state_list[StateIndex::GAS_JET].interval);
-  ee_address += sizeof(state_list[StateIndex::GAS_JET].interval);
-  EEPROM.put(ee_address, state_list[StateIndex::PRESSURE_RELIEF].interval);
-  ee_address += sizeof(state_list[StateIndex::PRESSURE_RELIEF].interval);
-  EEPROM.put(ee_address, state_list[StateIndex::WAITING].interval);
-  lcd.clear();
-  lcd.print("Settings Saved");
-  delay(2000);
-}
-
-void SettingsLoad()
-{
-  /*
-  Load the time settings in the EEPROM
-  */
-  int ee_address = 0;
-  EEPROM.get(ee_address, state_list[StateIndex::FILTRATION].interval);
-  ee_address += sizeof(state_list[StateIndex::FILTRATION].interval);
-  EEPROM.get(ee_address, state_list[StateIndex::GAS_JET].interval);
-  ee_address += sizeof(state_list[StateIndex::GAS_JET].interval);
-  EEPROM.get(ee_address, state_list[StateIndex::PRESSURE_RELIEF].interval);
-  ee_address += sizeof(state_list[StateIndex::PRESSURE_RELIEF].interval);
-  EEPROM.get(ee_address, state_list[StateIndex::WAITING].interval);
-  lcd.clear();
-  lcd.print("Settings Loaded");
-  delay(2000);
 }
 
 void menuSetting(const char name[], uint32_t time, TimeSetting time_setting)
@@ -379,6 +536,12 @@ void updateMenu() {
       lcd.clear();
       lcd.print(">Reset Cycles");
       break;
+    case MenuSettings::FAILSAVE_MS:
+      lcd.clear();
+      lcd.print(">Crashes");
+      lcd.setCursor(0, 1);
+      lcd.print(failsafe.counter);
+      break;
     /*
 
     MenuSettings::END_MS
@@ -407,6 +570,8 @@ void executeAction(Action action)
       if (state_running && action == Action::SELECT)
       {
         state_running = false;
+
+        SetEEPROMStatus(0);
 
         if (interval > 0)
           interval = interval - (millis() - time_start);
@@ -445,7 +610,11 @@ void executeAction(Action action)
     {
     case MenuSettings::RETURN_MS:
       // Action: SELECT Return to Main Menu, LEFT/RIGHT menu_settings
-      if (action == Action::SELECT) menu_settings = -1;
+      if (action == Action::SELECT) 
+      {
+        menu_settings = -1;
+        SaveIntervalsToEEPROM();
+      }
       /*
 
       Action::LEFT
@@ -469,14 +638,15 @@ void executeAction(Action action)
     case MenuSettings::RESET_MS:
       if (action == Action::SELECT) Reset();
       if (action == Action::LEFT) menu_settings--;
-      /*
-
-      Action::RIGHT
-      set menu_settings to it's min value to go to the
-      first menu entry
-
-      */
       if (action == Action::RIGHT) menu_settings++;
+      break;
+    case MenuSettings::FAILSAVE_MS:
+      if (action == Action::SELECT)
+      {
+        // Nothing will happen
+      };
+      if (action == Action::LEFT) menu_settings--;
+      if (action == Action::RIGHT) menu_settings = MenuSettings::RETURN_MS;
       break;
     default:
       // Settings Menu: every time based setting
@@ -504,28 +674,6 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::WAITING_MS)
         && (state_list[menu_settings].interval >= 1000UL * 60UL))
           state_list[menu_settings].interval -= 1000UL * 60UL;
-
-        /*
-        switch (menu_settings)
-        {
-        case MenuSettings::FILTRATION_MS:
-          if (state_list[StateIndex::FILTRATION].interval >= 1000UL * 60UL)
-            state_list[StateIndex::FILTRATION].interval -= 1000UL * 60UL;
-          break;
-        case MenuSettings::GAS_JET_MS:
-          if (state_list[StateIndex::GAS_JET].interval >= 1000UL * 60UL)
-            state_list[StateIndex::GAS_JET].interval -= 1000UL * 60UL;
-          break;
-        case MenuSettings::PRESSURE_RELIEF_MS:
-          if (state_list[StateIndex::PRESSURE_RELIEF].interval >= 1000UL * 60UL)
-            state_list[StateIndex::PRESSURE_RELIEF].interval -= 1000UL * 60UL;
-          break;
-        case MenuSettings::WAITING_MS:
-          if (state_list[StateIndex::WAITING].interval >= 1000UL * 60UL)
-            state_list[StateIndex::WAITING].interval -= 1000UL * 60UL;
-          break;
-        }
-        */
       }
       else if (menu_setting_edit && menu_setting_pos == 0 && action == Action::RIGHT)
       {
@@ -537,27 +685,6 @@ void executeAction(Action action)
         && (state_list[menu_settings].interval + 1000UL * 60UL <= ULONG_MAX))
           state_list[menu_settings].interval += 1000UL * 60UL;
 
-        /*
-        switch (menu_settings)
-        {
-        case MenuSettings::FILTRATION_MS:
-          if (state_list[StateIndex::FILTRATION].interval + 1000UL * 60UL <= ULONG_MAX)
-            state_list[StateIndex::FILTRATION].interval += 1000UL * 60UL;
-          break;
-        case MenuSettings::GAS_JET_MS:
-          if (state_list[StateIndex::GAS_JET].interval + 1000UL * 60UL <= ULONG_MAX)
-            state_list[StateIndex::GAS_JET].interval += 1000UL * 60UL;
-          break;
-        case MenuSettings::PRESSURE_RELIEF_MS:
-          if (state_list[StateIndex::PRESSURE_RELIEF].interval + 1000UL * 60UL <= ULONG_MAX)
-            state_list[StateIndex::PRESSURE_RELIEF].interval += 1000UL * 60UL;
-          break;
-        case MenuSettings::WAITING_MS:
-          if (state_list[StateIndex::WAITING].interval + 1000UL * 60UL <= ULONG_MAX)
-            state_list[StateIndex::WAITING].interval += 1000UL * 60UL;
-          break;
-        }
-        */
       }
       else if (menu_setting_edit && menu_setting_pos == 1 && action == Action::LEFT)
       {
@@ -568,28 +695,6 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::WAITING_MS)
         && (state_list[menu_settings].interval >= 1000UL))
           state_list[menu_settings].interval -= 1000UL;
-        
-        /*
-        switch (menu_settings)
-        {
-        case MenuSettings::FILTRATION_MS:
-          if (state_list[StateIndex::FILTRATION].interval >= 1000UL)
-            state_list[StateIndex::FILTRATION].interval -= 1000UL;
-          break;
-        case MenuSettings::GAS_JET_MS:
-          if (state_list[StateIndex::GAS_JET].interval >= 1000UL)
-            state_list[StateIndex::GAS_JET].interval -= 1000UL;
-          break;
-        case MenuSettings::PRESSURE_RELIEF_MS:
-          if (state_list[StateIndex::PRESSURE_RELIEF].interval >= 1000UL)
-            state_list[StateIndex::PRESSURE_RELIEF].interval -= 1000UL;
-          break;
-        case MenuSettings::WAITING_MS:
-          if (state_list[StateIndex::WAITING].interval >= 1000UL)
-            state_list[StateIndex::WAITING].interval -= 1000UL;
-          break;
-        }
-        */
       }
       else if (menu_setting_edit && menu_setting_pos == 1 && action == Action::RIGHT)
       {
@@ -600,28 +705,6 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::WAITING_MS)
         && (state_list[menu_settings].interval + 1000UL <= ULONG_MAX))
           state_list[menu_settings].interval += 1000UL;
-        
-        /*
-        switch (menu_settings)
-        {
-        case MenuSettings::FILTRATION_MS:
-          if (state_list[StateIndex::FILTRATION].interval + 1000UL <= ULONG_MAX)
-            state_list[StateIndex::FILTRATION].interval += 1000UL;
-          break;
-        case MenuSettings::GAS_JET_MS:
-          if (state_list[StateIndex::GAS_JET].interval + 1000UL <= ULONG_MAX)
-            state_list[StateIndex::GAS_JET].interval += 1000UL;
-          break;
-        case MenuSettings::PRESSURE_RELIEF_MS:
-          if (state_list[StateIndex::PRESSURE_RELIEF].interval + 1000UL <= ULONG_MAX)
-            state_list[StateIndex::PRESSURE_RELIEF].interval += 1000UL;
-          break;
-        case MenuSettings::WAITING_MS:
-          if (state_list[StateIndex::WAITING].interval + 1000UL <= ULONG_MAX)
-            state_list[StateIndex::WAITING].interval += 1000UL;
-          break;
-        }
-        */
       }
       else if (!menu_setting_edit && action == Action::LEFT)
       {
@@ -720,16 +803,13 @@ void setup()
   strcpy(state_list[StateIndex::WAITING].name, "Waiting");
   state_list[StateIndex::WAITING].relay_setting = 0;
 
-  // Initial Time Settings -> Stored in EEPROM
-  //state_list[StateIndex::FILTRATION].interval = 6UL * 60UL * 1000UL;
-  //state_list[StateIndex::CLOSE_ALL1].interval = 2UL * 1000UL;
-  //state_list[StateIndex::GAS_JET].interval = 1UL * 60UL * 1000UL;
-  //state_list[StateIndex::CLOSE_ALL2].interval = state_list[1].interval;
-  //state_list[StateIndex::PRESSURE_RELIEF].interval = 1UL * 1000UL;
-  //state_list[StateIndex::WAITING].interval = 2UL * 60UL * 1000UL;
-
+  CalcEEPROMAdresses();
+  CheckFailsafe();
   SettingsLoad();
   updateMenu();
+
+  // Watchdog Timer 8 seconds
+  wdt_enable(WDTO_8S);
 }
 
 void loop()
@@ -808,7 +888,37 @@ void loop()
         state_index++;
       else
         state_index = 0;
-      
+
+      // Failsafe Start 
+      switch (state_index)
+      {
+        case StateIndex::FILTRATION:
+          SetEEPROMStatus(addr.fs_status_filtration);
+          EEPROM.put(addr.fs_status_filtration, true);
+          break;
+        case StateIndex::CLOSE_ALL1:
+          SetEEPROMStatus(addr.fs_status_gas_jet);
+          EEPROM.put(addr.fs_status_gas_jet, true);
+          break;
+        case StateIndex::GAS_JET:
+          SetEEPROMStatus(addr.fs_status_gas_jet);
+          EEPROM.put(addr.fs_status_gas_jet, true);
+          break;
+        case StateIndex::CLOSE_ALL2:
+          SetEEPROMStatus(addr.fs_status_pressure_relief);
+          EEPROM.put(addr.fs_status_pressure_relief, true);
+          break;
+        case StateIndex::PRESSURE_RELIEF:
+          SetEEPROMStatus(addr.fs_status_pressure_relief);
+          EEPROM.put(addr.fs_status_pressure_relief, true);
+          break;
+        case StateIndex::WAITING:
+          SetEEPROMStatus(addr.fs_status_waiting);
+          EEPROM.put(addr.fs_status_waiting, true);
+          break;
+      }
+      // Failsafe End
+
       execute = true;
       time_start = millis();
       interval = 0;
@@ -822,8 +932,11 @@ void loop()
     if (millis() % 1000 == 0)
       updateMenu();
   }
-    else
-    {
-      digitalWrite(button_led_pin, LOW);
-    }
+  else
+  {
+    digitalWrite(button_led_pin, LOW);
+  }
+
+  // Watchdog reset
+  wdt_reset();
 }
