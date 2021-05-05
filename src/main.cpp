@@ -37,6 +37,7 @@ Created:
 
 //#define DEBUG
 #define SERIALDEBUG(a) Serial.print(#a); Serial.print(": "); Serial.println(a);
+#define SERIALDEBUG_ Serial.print("\n");
 
 // Grove Encoder
 #define ENCODER_PIN1 A0
@@ -665,6 +666,27 @@ void executeAction(Action action)
         menu_setting_edit = true;
       }
 
+      int state_list_menu_index;
+
+      switch (menu_settings)
+      {
+        case MenuSettings::FILTRATION_MS:
+          state_list_menu_index = StateIndex::FILTRATION;
+          break;
+
+        case MenuSettings::GAS_JET_MS:
+          state_list_menu_index = StateIndex::GAS_JET;
+          break;
+
+        case MenuSettings::PRESSURE_RELIEF_MS:
+          state_list_menu_index = StateIndex::PRESSURE_RELIEF;
+          break;
+
+        case MenuSettings::WAITING_MS:
+          state_list_menu_index = StateIndex::WAITING;
+          break;
+      }
+
       if (menu_setting_edit && menu_setting_pos == 0 && action == Action::LEFT)
       {
         // decrease first time value
@@ -672,8 +694,8 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::GAS_JET_MS
         || menu_settings == MenuSettings::PRESSURE_RELIEF_MS
         || menu_settings == MenuSettings::WAITING_MS)
-        && (state_list[menu_settings].interval >= 1000UL * 60UL))
-          state_list[menu_settings].interval -= 1000UL * 60UL;
+        && (state_list[state_list_menu_index].interval >= 1000UL * 60UL))
+          state_list[state_list_menu_index].interval -= 1000UL * 60UL;
       }
       else if (menu_setting_edit && menu_setting_pos == 0 && action == Action::RIGHT)
       {
@@ -682,8 +704,8 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::GAS_JET_MS
         || menu_settings == MenuSettings::PRESSURE_RELIEF_MS
         || menu_settings == MenuSettings::WAITING_MS)
-        && (state_list[menu_settings].interval + 1000UL * 60UL <= ULONG_MAX))
-          state_list[menu_settings].interval += 1000UL * 60UL;
+        && (state_list[state_list_menu_index].interval + 1000UL * 60UL <= ULONG_MAX))
+          state_list[state_list_menu_index].interval += 1000UL * 60UL;
 
       }
       else if (menu_setting_edit && menu_setting_pos == 1 && action == Action::LEFT)
@@ -693,8 +715,8 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::GAS_JET_MS
         || menu_settings == MenuSettings::PRESSURE_RELIEF_MS
         || menu_settings == MenuSettings::WAITING_MS)
-        && (state_list[menu_settings].interval >= 1000UL))
-          state_list[menu_settings].interval -= 1000UL;
+        && (state_list[state_list_menu_index].interval >= 1000UL))
+          state_list[state_list_menu_index].interval -= 1000UL;
       }
       else if (menu_setting_edit && menu_setting_pos == 1 && action == Action::RIGHT)
       {
@@ -703,8 +725,8 @@ void executeAction(Action action)
         || menu_settings == MenuSettings::GAS_JET_MS
         || menu_settings == MenuSettings::PRESSURE_RELIEF_MS
         || menu_settings == MenuSettings::WAITING_MS)
-        && (state_list[menu_settings].interval + 1000UL <= ULONG_MAX))
-          state_list[menu_settings].interval += 1000UL;
+        && (state_list[state_list_menu_index].interval + 1000UL <= ULONG_MAX))
+          state_list[state_list_menu_index].interval += 1000UL;
       }
       else if (!menu_setting_edit && action == Action::LEFT)
       {
@@ -728,6 +750,7 @@ void executeAction(Action action)
   SERIALDEBUG(state_index)
   SERIALDEBUG(action)
   SERIALDEBUG(execute)
+  SERIALDEBUG_
   #endif
 }
 
